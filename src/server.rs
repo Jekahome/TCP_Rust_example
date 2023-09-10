@@ -1,46 +1,36 @@
+#![allow(unused_unsafe)]
+
 use std::thread;
 use std::net::{TcpListener, TcpStream, Shutdown};
-use std::io::{Read, Write};
-//use std::fs::OpenOptions;
-use std::io::BufWriter;
+use std::io::{Read, Write, BufWriter};
 use std::fs::File;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-struct Buffer(Option<BufWriter<std::fs::File>>);
+pub struct Buffer(BufWriter<std::fs::File>);
 impl Buffer {
-    fn new<P: AsRef<std::path::Path>>(&mut self,file: P,capacity:usize){
-        if self.0.is_none(){
-           self.0 = Some( BufWriter::with_capacity(capacity, File::create(file).unwrap()));  
-        } 
+    pub fn new<P: AsRef<std::path::Path>>(file: P, capacity: usize) -> Self{
+        Buffer(BufWriter::with_capacity(capacity, File::create(file).unwrap()))  
     }
-    fn write_all(&mut self,d:&[u8]) {
-        if let Some(ref mut buff) = self.0{
-            buff.write(d);
-        }
+    pub fn write_all(&mut self,d:&[u8]) {
+        let _ = self.0.write(d);
     }
-    fn flush(&mut self){
-        if let Some(ref mut buff) = self.0{
-            buff.flush().unwrap();
-            self.0 = None;
-        }
+    pub fn flush(&mut self){
+        self.0.flush().unwrap(); 
     }
 }
-
-static mut BUFFER:Buffer = Buffer(None);// способ использовать один буффер для всех частей потока
-static mut DATA:[u8;4096] = [0_u8; 4096];// способ убрать выделение памяти для масссива для каждого запроса
 
 fn handle_connection(mut stream: TcpStream) {
     stream.set_read_timeout(Some(Duration::new(0, 50))).expect("set_read_timeout call failed");
     //println!("stream read timeout {:?}",stream.read_timeout().unwrap());// 4ms
-    unsafe{ 
- 
-    unsafe{BUFFER.new("source/iteration.jpg",8388608);}//8388608 8Mb, 16777216 16Mb
-    
-    while match stream.read(&mut DATA) {
-        Ok(size) => {
+  
+    let mut store:Buffer = Buffer::new("source/new_pictures.jpg",8388608);//8388608 8Mb, 16777216 16Mb
+    let mut buf:Vec<u8> = vec![0u8;8192];
 
+    while match stream.read(&mut buf) {
+        Ok(size) => {
              if size > 0 {
-                unsafe{BUFFER.write_all(&DATA[0..size]);}
+                println!("read {} bytes", size);
+                store.write_all(&buf[0..size]);
              }
             
             // Канал захлёбываться при отсутствии синхронизации с писателем
@@ -52,27 +42,26 @@ fn handle_connection(mut stream: TcpStream) {
             if size > 0{  
                 true 
             }else{
-                unsafe{ BUFFER.flush();}
-                stream.shutdown(Shutdown::Both);
+                store.flush();
+                let _ = stream.shutdown(Shutdown::Both);
                 false
             }
-           
         },
         Err(e) => {
            
-            unsafe{ BUFFER.flush();}
+            store.flush();
 
             println!("Err:{:?}",e);
           
             if let Ok(addr) = stream.peer_addr(){
                 println!("Произошла ошибка, соединение с {}", addr);
             }
-            stream.shutdown(Shutdown::Both);
+            let _ = stream.shutdown(Shutdown::Both);
             
             false
         }
     } {}
-}
+
 }
 
 // cargo run --bin server 
@@ -82,8 +71,6 @@ fn main() {
     println!("Server listening on port 3333");
     listener.set_ttl(100).expect("could not set TTL");
     println!("Время жизни пакета {:?}",listener.ttl().unwrap_or(0));// default 64
-
-    unsafe{BUFFER.new("source/iteration.jpg",8388608);}
 
     // итератор по соединениям 
     for stream in listener.incoming() {
@@ -97,7 +84,7 @@ fn main() {
             }
             Err(e) => {
                 println!("Error: {}", e);
-                /* connection failed */
+                // connection failed 
             }
         }
     }
